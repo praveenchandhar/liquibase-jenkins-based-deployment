@@ -1,0 +1,111 @@
+name: Jenkins Deployment Notification
+
+on:
+  pull_request:
+    paths:
+      - db/mongodb/dev/weekly_release/**
+      - db/mongodb/dev/monthly_release/**
+    types:
+      - closed
+
+jobs:
+  notify-jenkins-ready:
+    if: ${{ github.event.pull_request.merged == true }}
+    name: Notify Jenkins Ready for Deployment
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Detect Merged XML Files
+        id: detect_xml
+        run: |
+          echo "=== Detecting Merged XML Files ==="
+          
+          MERGE_COMMIT_SHA=${{ github.event.pull_request.merge_commit_sha }}
+          HEAD_SHA=${{ github.event.pull_request.head.sha }}
+          BASE_SHA=${{ github.event.pull_request.base.sha }}
+          BRANCH_NAME=${{ github.event.pull_request.head.ref }}
+          
+          # Get XML files from the merge
+          XML_FILES=$(git diff-tree --no-commit-id --name-only -r $MERGE_COMMIT_SHA 2>/dev/null | { grep -E 'db/mongodb/dev/(weekly_release|monthly_release)/[0-9]{8}/.*\.xml$' || true; })
+          
+          if [ -z "$XML_FILES" ]; then
+            XML_FILES=$(git diff --name-only $BASE_SHA..$HEAD_SHA 2>/dev/null | { grep -E 'db/mongodb/dev/(weekly_release|monthly_release)/[0-9]{8}/.*\.xml$' || true; })
+          fi
+          
+          if [ -z "$XML_FILES" ]; then
+            echo "has_xml_files=false" >> $GITHUB_ENV
+          else
+            echo "✅ XML files detected:"
+            echo "$XML_FILES"
+            
+            XML_COUNT=$(echo "$XML_FILES" | wc -l)
+            FIRST_XML=$(echo "$XML_FILES" | head -n 1)
+            
+            echo "xml_files_list=$XML_FILES" >> $GITHUB_ENV
+            echo "xml_count=$XML_COUNT" >> $GITHUB_ENV
+            echo "has_xml_files=true" >> $GITHUB_ENV
+            echo "branch_name=$BRANCH_NAME" >> $GITHUB_ENV
+            
+            # Extract context from the XML file
+            if [ -f "$FIRST_XML" ]; then
+              CONTEXT=$(grep -oP 'context="[^"]*"' "$FIRST_XML" | head -n 1 | sed 's/context="//; s/"//' || echo "liquibase_test")
+              echo "context=$CONTEXT" >> $GITHUB_ENV
+            else
+              echo "context=liquibase_test" >> $GITHUB_ENV
+            fi
+          fi
+
+      - name: Post Jenkins Instructions
+        if: env.has_xml_files == 'true'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const branchName = '${{ env.branch_name }}';
+            const context = '${{ env.context }}';
+            const xmlCount = '${{ env.xml_count }}';
+            const jenkinsUrl = 'http://localhost:8080';
+            
+            const commentBody = `## 🚀 Changesets Merged - Ready for Jenkins Deployment
+
+            **Branch:** \`${branchName}\`  
+            **Context:** \`${context}\`  
+            **XML Files:** ${xmlCount} changeset(s)  
+
+            ## 📋 Jenkins Deployment Steps
+
+            ### 1. Go to Jenkins Dashboard
+            🌐 **Jenkins URL:** [${jenkinsUrl}](${jenkinsUrl})
+
+            ### 2. Navigate to the Deployment Job
+            📁 **Job Name:** \`liquibase-mongodb-deployment\`  
+            🔗 **Direct Link:** [${jenkinsUrl}/job/liquibase-mongodb-deployment](${jenkinsUrl}/job/liquibase-mongodb-deployment)
+
+            ### 3. Click "Build with Parameters"
+            📋 **Enter these parameters:**
+            - **BRANCH_OR_TAG:** \`${branchName}\`
+            - **LIQUIBASE_ACTION:** Choose from dropdown (status/update/rollback)
+            - **ROLLBACK_COUNT:** (Only if rollback selected - will show 1-N options based on changesets)
+
+            ### 4. Click "Build" to Start Deployment
+
+            ## 📊 Deployment Details
+            - **Branch to Deploy:** \`${branchName}\`
+            - **Database Context:** \`${context}\` (auto-detected)
+            - **Total Changesets:** ${xmlCount}
+
+            ---
+            *🤖 Notification generated after PR merge*  
+            *⚡ [View Workflow Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})*
+            `;
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: commentBody
+            });
