@@ -79,12 +79,13 @@ pipeline {
                         mkdir -p ${JARS_DIR}
                         
                         # Download Liquibase CLI if not exists
-                        if [ ! -f "/usr/local/bin/liquibase" ]; then
-                            echo "📥 Downloading Liquibase CLI ${LIQUIBASE_VERSION}..."
+                        if [ ! -f "${WORKSPACE}/liquibase" ]; then
+                            echo "Liquibase installed at: ${WORKSPACE}/liquibase"
                             curl -L -o liquibase-${LIQUIBASE_VERSION}.zip https://github.com/liquibase/liquibase/releases/download/v${LIQUIBASE_VERSION}/liquibase-${LIQUIBASE_VERSION}.zip
                             unzip liquibase-${LIQUIBASE_VERSION}.zip
                             chmod +x liquibase
-                            sudo mv liquibase /usr/local/bin/liquibase
+                            mv liquibase ${WORKSPACE}/liquibase
+                            export PATH="${WORKSPACE}:$PATH"
                         fi
                         
                         liquibase --version
