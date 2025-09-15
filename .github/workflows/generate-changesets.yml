@@ -1,0 +1,189 @@
+name: Generate Changesets from Merged JS Files
+
+on:
+  pull_request:
+    paths:
+      - db/mongodb/dev/weekly_release/**
+      - db/mongodb/dev/monthly_release/**
+    types:
+      - opened
+      - synchronize
+
+jobs:
+  generate-changesets:
+    name: Generate Changesets and Add to PR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      # Step 1: Checkout Repository with Token
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      # Step 2: Debug PR Information
+      - name: Debug PR Information
+        run: |
+          echo "=== PR Debug Information ==="
+          echo "PR Number: ${{ github.event.pull_request.number }}"
+          echo "PR Title: ${{ github.event.pull_request.title }}"
+          echo "Base Branch: ${{ github.event.pull_request.base.ref }}"
+          echo "Head Branch: ${{ github.event.pull_request.head.ref }}"
+          echo "PR State: ${{ github.event.pull_request.state }}"
+          echo "Action: ${{ github.event.action }}"
+
+      # Step 3: Detect JS Files in PR
+      - name: Detect JS Files in PR
+        id: detect_js_files
+        run: |
+          echo "=== JS File Detection in PR ==="
+          
+          # Get the head SHA of the PR
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          
+          echo "Head SHA: $HEAD_SHA"
+          echo "Base SHA: $BASE_SHA"
+          
+          # Get changed files in the PR
+          CHANGED_FILES=$(git diff --name-only $BASE_SHA..$HEAD_SHA 2>/dev/null || echo "")
+          echo "Changed files:"
+          echo "$CHANGED_FILES"
+          
+          # Filter for JS files in our target directories
+          JS_FILES=$(echo "$CHANGED_FILES" | grep -E 'db/mongodb/dev/(weekly_release|monthly_release)/[0-9]{8}/.*\.js$' || true)
+          
+          echo ""
+          echo "=== JS Files Found ==="
+          if [ -z "$JS_FILES" ]; then
+            echo "❌ No .js files found in target directories"
+            echo "js_files=" >> $GITHUB_ENV
+            echo "has_js_files=false" >> $GITHUB_ENV
+          else
+            echo "✅ JS files detected:"
+            echo "$JS_FILES"
+            echo "js_files=$JS_FILES" >> $GITHUB_ENV
+            echo "has_js_files=true" >> $GITHUB_ENV
+            
+            # Count files
+            FILE_COUNT=$(echo "$JS_FILES" | wc -l)
+            echo "file_count=$FILE_COUNT" >> $GITHUB_ENV
+            echo "📊 Total JS files found: $FILE_COUNT"
+          fi
+
+      # Step 4: Setup Python Environment
+      - name: Setup Python Environment
+        if: env.has_js_files == 'true'
+        run: |
+          echo "=== Setting up Python Environment ==="
+          python3 --version
+          pip3 --version
+          pip3 install PyGithub requests pyyaml
+
+      # Step 5: Process JS Files and Generate XML
+      - name: Process JS Files and Generate XML
+        if: env.has_js_files == 'true'
+        id: process_js_files
+        run: |
+          echo "=== Processing JS Files and Generating XML ==="
+          echo "JS Files: ${{ env.js_files }}"
+          echo "Author: ${{ github.actor }}"
+          
+          # Initialize counters and results
+          PROCESSED_FILES=0
+          SUCCESSFUL_FILES=0
+          FAILED_FILES=0
+          GENERATED_XML_FILES=""
+          
+          # Process each JS file
+          while IFS= read -r js_file; do
+            if [ -n "$js_file" ] && [ -f "$js_file" ]; then
+              PROCESSED_FILES=$((PROCESSED_FILES + 1))
+              echo ""
+              echo "🔄 Processing file $PROCESSED_FILES: $js_file"
+              
+              # Extract directory and filename
+              JS_DIR=$(dirname "$js_file")
+              JS_FILENAME=$(basename "$js_file" .js)
+              
+              # Extract date from directory path
+              DATE_PATTERN=$(echo "$JS_DIR" | grep -oE '[0-9]{8}' | head -1)
+              if [ -z "$DATE_PATTERN" ]; then
+                echo "❌ Could not extract date from path: $JS_DIR"
+                FAILED_FILES=$((FAILED_FILES + 1))
+                continue
+              fi
+              
+              # Create version identifier
+              EXISTING_JS_COUNT=$(find "$JS_DIR" -name "*.js" | wc -l)
+              FILE_NUMBER=$EXISTING_JS_COUNT
+              VERSION="${DATE_PATTERN}_${FILE_NUMBER}"
+              
+              # Generate XML file path
+              XML_FILE="${JS_DIR}/${JS_FILENAME}.xml"
+              
+              # Execute Python script to generate XML
+              python3 scripts/v4.py \
+                --version "$VERSION" \
+                --js_file "$js_file" \
+                --author "${{ github.actor }}" \
+                --repo "${{ github.repository }}" \
+                --branch "${{ github.event.pull_request.head.ref }}" \
+                --token "${{ secrets.GITHUB_TOKEN }}" \
+                --no-pr
+              
+              # Check if XML file was generated successfully
+              if [ -f "$XML_FILE" ]; then
+                echo "✅ XML generated successfully: $XML_FILE"
+                SUCCESSFUL_FILES=$((SUCCESSFUL_FILES + 1))
+                GENERATED_XML_FILES="$GENERATED_XML_FILES$XML_FILE"$'\n'
+              else
+                echo "❌ XML file was not generated"
+                FAILED_FILES=$((FAILED_FILES + 1))
+              fi
+            fi
+          done <<< "${{ env.js_files }}"
+          
+          # Set environment variables for summary
+          echo "processed_files=$PROCESSED_FILES" >> $GITHUB_ENV
+          echo "successful_files=$SUCCESSFUL_FILES" >> $GITHUB_ENV
+          echo "failed_files=$FAILED_FILES" >> $GITHUB_ENV
+          echo "generated_xml_files=$GENERATED_XML_FILES" >> $GITHUB_ENV
+
+      # Step 6: Commit XML Files to PR Branch
+      - name: Commit XML Files to PR Branch
+        if: env.has_js_files == 'true' && env.successful_files > 0
+        run: |
+          echo "=== Committing XML Files to PR Branch ==="
+          
+          # Configure git
+          git config --local user.email "praveenchandhar1974@gmail.com"
+          git config --local user.name "praveen.chandhar"
+          
+          # Add files to git
+          while IFS= read -r xml_file; do
+            if [ -n "$xml_file" ] && [ -f "$xml_file" ]; then
+              git add "$xml_file"
+            fi
+          done <<< "${{ env.generated_xml_files }}"
+          
+          # Check if there are any staged changes
+          if ! git diff --staged --quiet; then
+            COMMIT_MSG="🤖 Auto-generated XML changesets for ${{ github.event.pull_request.title }}"
+            git commit -m "$COMMIT_MSG"
+            git push origin HEAD:${{ github.event.pull_request.head.ref }}
+            echo "✅ XML files committed and pushed to PR branch"
+          fi
+
+      # Step 7: Summary
+      - name: Summary
+        if: always()
+        run: |
+          echo "=== Workflow Summary ==="
+          echo "Processed: ${{ env.processed_files }}"
+          echo "Successful: ${{ env.successful_files }}"
+          echo "Failed: ${{ env.failed_files }}"
