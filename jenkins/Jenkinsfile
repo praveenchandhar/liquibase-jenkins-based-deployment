@@ -81,7 +81,7 @@ pipeline {
                         # Download Liquibase CLI if not exists
                         if [ ! -f "/usr/local/bin/liquibase" ]; then
                             echo "📥 Downloading Liquibase CLI ${LIQUIBASE_VERSION}..."
-                            wget --quiet https://github.com/liquibase/liquibase/releases/download/v${LIQUIBASE_VERSION}/liquibase-${LIQUIBASE_VERSION}.zip
+                            curl -L -o liquibase-${LIQUIBASE_VERSION}.zip https://github.com/liquibase/liquibase/releases/download/v${LIQUIBASE_VERSION}/liquibase-${LIQUIBASE_VERSION}.zip
                             unzip liquibase-${LIQUIBASE_VERSION}.zip
                             chmod +x liquibase
                             sudo mv liquibase /usr/local/bin/liquibase
@@ -103,32 +103,32 @@ pipeline {
                             echo "📥 Downloading dependencies..."
                             
                             # MongoDB JARs
-                            wget --quiet -O ${JARS_DIR}/mongodb-driver-core.jar https://repo1.maven.org/maven2/org/mongodb/mongodb-driver-core/5.5.0/mongodb-driver-core-5.5.0.jar
-                            wget --quiet -O ${JARS_DIR}/mongodb-driver-sync.jar https://repo1.maven.org/maven2/org/mongodb/mongodb-driver-sync/5.5.0/mongodb-driver-sync-5.5.0.jar
-                            wget --quiet -O ${JARS_DIR}/bson.jar https://repo1.maven.org/maven2/org/mongodb/bson/5.5.0/bson-5.5.0.jar
+                            curl -L -o ${JARS_DIR}/mongodb-driver-core.jar https://repo1.maven.org/maven2/org/mongodb/mongodb-driver-core/5.5.0/mongodb-driver-core-5.5.0.jar
+                            curl -L -o ${JARS_DIR}/mongodb-driver-sync.jar https://repo1.maven.org/maven2/org/mongodb/mongodb-driver-sync/5.5.0/mongodb-driver-sync-5.5.0.jar
+                            curl -L -o ${JARS_DIR}/bson.jar https://repo1.maven.org/maven2/org/mongodb/bson/5.5.0/bson-5.5.0.jar
 
                             # Liquibase Core
-                            wget --quiet -O ${JARS_DIR}/liquibase-core.jar https://repo1.maven.org/maven2/org/liquibase/liquibase-core/${LIQUIBASE_VERSION}/liquibase-core-${LIQUIBASE_VERSION}.jar
+                            curl -L -o ${JARS_DIR}/liquibase-core.jar https://repo1.maven.org/maven2/org/liquibase/liquibase-core/${LIQUIBASE_VERSION}/liquibase-core-${LIQUIBASE_VERSION}.jar
 
                             # Liquibase MongoDB Extension
-                            wget --quiet -O ${JARS_DIR}/liquibase-mongodb.jar https://repo1.maven.org/maven2/org/liquibase/ext/liquibase-mongodb/${LIQUIBASE_VERSION}/liquibase-mongodb-${LIQUIBASE_VERSION}.jar
+                            curl -L -o ${JARS_DIR}/liquibase-mongodb.jar https://repo1.maven.org/maven2/org/liquibase/ext/liquibase-mongodb/${LIQUIBASE_VERSION}/liquibase-mongodb-${LIQUIBASE_VERSION}.jar
 
                             # Additional Dependencies
-                            wget --quiet -O ${JARS_DIR}/commons-io.jar https://repo1.maven.org/maven2/commons-io/commons-io/2.13.0/commons-io-2.13.0.jar
-                            wget --quiet -O ${JARS_DIR}/commons-lang3.jar https://repo1.maven.org/maven2/org/apache/commons/commons-lang3/3.13.0/commons-lang3-3.13.0.jar
-                            wget --quiet -O ${JARS_DIR}/snakeyaml.jar https://repo1.maven.org/maven2/org/yaml/snakeyaml/1.33/snakeyaml-1.33.jar
+                            curl -L -o ${JARS_DIR}/commons-io.jar https://repo1.maven.org/maven2/commons-io/commons-io/2.13.0/commons-io-2.13.0.jar
+                            curl -L -o ${JARS_DIR}/commons-lang3.jar https://repo1.maven.org/maven2/org/apache/commons/commons-lang3/3.13.0/commons-lang3-3.13.0.jar
+                            curl -L -o ${JARS_DIR}/snakeyaml.jar https://repo1.maven.org/maven2/org/yaml/snakeyaml/1.33/snakeyaml-1.33.jar
 
                             # Jackson Dependencies
-                            wget --quiet -O ${JARS_DIR}/jackson-annotations.jar https://repo1.maven.org/maven2/com/fasterxml/jackson/core/jackson-annotations/2.14.2/jackson-annotations-2.14.2.jar
-                            wget --quiet -O ${JARS_DIR}/jackson-core.jar https://repo1.maven.org/maven2/com/fasterxml/jackson/core/jackson-core/2.14.2/jackson-core-2.14.2.jar
-                            wget --quiet -O ${JARS_DIR}/jackson-databind.jar https://repo1.maven.org/maven2/com/fasterxml/jackson/core/jackson-databind/2.14.2/jackson-databind-2.14.2.jar
+                            curl -L -o ${JARS_DIR}/jackson-annotations.jar https://repo1.maven.org/maven2/com/fasterxml/jackson/core/jackson-annotations/2.14.2/jackson-annotations-2.14.2.jar
+                            curl -L -o ${JARS_DIR}/jackson-core.jar https://repo1.maven.org/maven2/com/fasterxml/jackson/core/jackson-core/2.14.2/jackson-core-2.14.2.jar
+                            curl -L -o ${JARS_DIR}/jackson-databind.jar https://repo1.maven.org/maven2/com/fasterxml/jackson/core/jackson-databind/2.14.2/jackson-databind-2.14.2.jar
 
                             # OpenCSV
-                            wget --quiet -O ${JARS_DIR}/opencsv.jar https://repo1.maven.org/maven2/com/opencsv/opencsv/5.7.1/opencsv-5.7.1.jar
+                            curl -L -o ${JARS_DIR}/opencsv.jar https://repo1.maven.org/maven2/com/opencsv/opencsv/5.7.1/opencsv-5.7.1.jar
 
                             # SLF4J
-                            wget --quiet -O ${JARS_DIR}/slf4j-api.jar https://repo1.maven.org/maven2/org/slf4j/slf4j-api/1.7.36/slf4j-api-1.7.36.jar
-                            wget --quiet -O ${JARS_DIR}/slf4j-simple.jar https://repo1.maven.org/maven2/org/slf4j/slf4j-simple/1.7.36/slf4j-simple-1.7.36.jar
+                            curl -L -o ${JARS_DIR}/slf4j-api.jar https://repo1.maven.org/maven2/org/slf4j/slf4j-api/1.7.36/slf4j-api-1.7.36.jar
+                            curl -L -o ${JARS_DIR}/slf4j-simple.jar https://repo1.maven.org/maven2/org/slf4j/slf4j-simple/1.7.36/slf4j-simple-1.7.36.jar
                         fi
                         
                         echo "📋 Available JAR files:"
