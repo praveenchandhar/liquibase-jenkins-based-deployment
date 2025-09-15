@@ -1,4 +1,4 @@
-name: Generate Changesets and Deploy via Jenkins
+name: Generate Changesets (Manual Jenkins Deployment)
 
 on:
   pull_request:
@@ -10,8 +10,8 @@ on:
       - synchronize
 
 jobs:
-  generate-and-deploy:
-    name: Generate Changesets and Deploy
+  generate-changesets:
+    name: Generate Changesets for Manual Deployment
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -161,166 +161,56 @@ jobs:
             echo "context=liquibase_test" >> $GITHUB_ENV
           fi
 
-      # Step 8: Trigger Jenkins Deployment
-      - name: Trigger Jenkins Deployment
-        if: env.has_js_files == 'true' && env.successful_files > 0
-        id: jenkins_deploy
-        run: |
-          echo "=== Triggering Jenkins Deployment ==="
-          
-          JENKINS_URL="${{ secrets.JENKINS_URL || 'http://localhost:8080' }}"
-          JENKINS_USER="${{ secrets.JENKINS_USER }}"
-          JENKINS_TOKEN="${{ secrets.JENKINS_TOKEN }}"
-          JOB_NAME="liquibase-mongo-jenkins-deployment"
-          BRANCH_NAME="${{ github.event.pull_request.head.ref }}"
-          
-          echo "🚀 Triggering Jenkins deployment..."
-          echo "   Branch: $BRANCH_NAME"
-          echo "   Context: ${{ env.context }}"
-          echo "   Jenkins URL: $JENKINS_URL"
-          
-          if [ -n "$JENKINS_USER" ] && [ -n "$JENKINS_TOKEN" ]; then
-            # Trigger Jenkins job
-            JENKINS_RESPONSE=$(curl -s -w "%{http_code}" \
-              -X POST \
-              -u "$JENKINS_USER:$JENKINS_TOKEN" \
-              "$JENKINS_URL/job/$JOB_NAME/buildWithParameters" \
-              -d "BRANCH_OR_TAG=$BRANCH_NAME" \
-              -d "LIQUIBASE_ACTION=update" \
-              -d "ROLLBACK_COUNT=1")
-            
-            HTTP_CODE="${JENKINS_RESPONSE: -3}"
-            
-            if [ "$HTTP_CODE" = "201" ] || [ "$HTTP_CODE" = "200" ]; then
-              echo "✅ Jenkins job triggered successfully"
-              echo "jenkins_triggered=true" >> $GITHUB_ENV
-              
-              # Wait for job to complete
-              echo "⏳ Waiting for Jenkins job to complete..."
-              sleep 30  # Give Jenkins time to start
-              
-              # Check job status (simplified - you might want to make this more robust)
-              for i in {1..10}; do
-                echo "🔍 Checking job status (attempt $i/10)..."
-                
-                JOB_STATUS=$(curl -s \
-                  -u "$JENKINS_USER:$JENKINS_TOKEN" \
-                  "$JENKINS_URL/job/$JOB_NAME/lastBuild/api/json" | \
-                  grep -o '"result":"[^"]*"' | cut -d':' -f2 | tr -d '"')
-                
-                if [ "$JOB_STATUS" = "SUCCESS" ]; then
-                  echo "✅ Jenkins deployment successful!"
-                  echo "jenkins_success=true" >> $GITHUB_ENV
-                  break
-                elif [ "$JOB_STATUS" = "FAILURE" ]; then
-                  echo "❌ Jenkins deployment failed!"
-                  echo "jenkins_success=false" >> $GITHUB_ENV
-                  break
-                elif [ "$JOB_STATUS" = "null" ] || [ -z "$JOB_STATUS" ]; then
-                  echo "⏳ Job still running... waiting 30 seconds"
-                  sleep 30
-                else
-                  echo "🔄 Job status: $JOB_STATUS"
-                  sleep 30
-                fi
-              done
-              
-              if [ "${{ env.jenkins_success }}" != "true" ]; then
-                echo "⏰ Job timeout or failed"
-                echo "jenkins_success=false" >> $GITHUB_ENV
-              fi
-              
-            else
-              echo "❌ Failed to trigger Jenkins job (HTTP: $HTTP_CODE)"
-              echo "jenkins_triggered=false" >> $GITHUB_ENV
-            fi
-          else
-            echo "⚠️ Jenkins credentials not configured"
-            echo "jenkins_triggered=false" >> $GITHUB_ENV
-          fi
-
-      # Step 9: Auto-merge PR if Jenkins deployment successful
-      - name: Auto-merge PR on Successful Deployment
-        if: env.jenkins_success == 'true'
-        uses: actions/github-script@v6
-        with:
-          script: |
-            const { data: pr } = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.payload.pull_request.number
-            });
-            
-            if (pr.mergeable) {
-              await github.rest.pulls.merge({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: context.payload.pull_request.number,
-                commit_title: `🚀 Auto-merge after successful deployment: ${pr.title}`,
-                commit_message: `Automatically merged after successful Jenkins deployment to database.\n\nDeployment details:\n- Branch: ${{ github.event.pull_request.head.ref }}\n- Context: ${{ env.context }}\n- Files processed: ${{ env.successful_files }}`,
-                merge_method: "squash"
-              });
-              
-              console.log('✅ PR auto-merged after successful deployment');
-            } else {
-              console.log('❌ PR not mergeable');
-            }
-
-      # Step 10: Post deployment status comment
-      - name: Post Deployment Status
+      # Step 8: Post Manual Jenkins Instructions
+      - name: Post Manual Jenkins Instructions
         if: env.has_js_files == 'true' && env.successful_files > 0
         uses: actions/github-script@v6
         with:
           script: |
-            const jenkinsSuccess = '${{ env.jenkins_success }}';
             const branchName = '${{ github.event.pull_request.head.ref }}';
             const dbContext = '${{ env.context }}';
             const processedFiles = '${{ env.successful_files }}';
-            const jenkinsUrl = '${{ secrets.JENKINS_URL || 'http://localhost:8080' }}';
+            const jenkinsUrl = 'http://localhost:8080';
             
-            let statusIcon, statusText, nextSteps;
-            
-            if (jenkinsSuccess === 'true') {
-              statusIcon = '✅';
-              statusText = 'DEPLOYMENT SUCCESSFUL';
-              nextSteps = `
-              ## 🎉 Deployment Completed Successfully!
-              
-              Your changes have been successfully deployed to the database and the PR has been auto-merged.
-              
-              **What happened:**
-              1. ✅ XML changesets generated from JS files
-              2. ✅ Jenkins deployment executed successfully  
-              3. ✅ Database changes applied
-              4. ✅ PR automatically merged
-              `;
-            } else {
-              statusIcon = '❌';
-              statusText = 'DEPLOYMENT FAILED';
-              nextSteps = `
-              ## 🚨 Deployment Failed
-              
-              The Jenkins deployment failed. Please check the logs and fix any issues.
-              
-              **Next steps:**
-              1. 🔍 Check Jenkins logs: [${jenkinsUrl}/job/liquibase-mongo-jenkins-deployment](${jenkinsUrl}/job/liquibase-mongo-jenkins-deployment)
-              2. 🔧 Fix any issues in your changeset files
-              3. 🔄 Push additional commits to trigger re-deployment
-              4. 📝 PR will remain open until deployment succeeds
-              `;
-            }
-            
-            const commentBody = `## ${statusIcon} Database Deployment Status: ${statusText}
-            
+            const commentBody = `## 🤖 XML Changesets Generated - Ready for Manual Jenkins Deployment
+
             **Branch:** \`${branchName}\`  
             **Database Context:** \`${dbContext}\`  
             **Files Processed:** ${processedFiles} changeset(s)  
-            **Jenkins Job:** [View Details](${jenkinsUrl}/job/liquibase-mongo-jenkins-deployment)
-            
-            ${nextSteps}
-            
+
+            ## 📋 Manual Jenkins Deployment Steps
+
+            ### 1. Go to Jenkins Dashboard
+            🌐 **Jenkins URL:** [${jenkinsUrl}](${jenkinsUrl})
+
+            ### 2. Navigate to the Deployment Job
+            📁 **Job Name:** \`liquibase-mongo-jenkins-deployment\`  
+            🔗 **Direct Link:** [${jenkinsUrl}/job/liquibase-mongo-jenkins-deployment](${jenkinsUrl}/job/liquibase-mongo-jenkins-deployment)
+
+            ### 3. Click "Build with Parameters"
+            📋 **Enter these parameters:**
+            - **BRANCH_OR_TAG:** \`${branchName}\`
+            - **LIQUIBASE_ACTION:** \`update\` (for deployment) or \`status\` (for dry-run)
+            - **ROLLBACK_COUNT:** \`1\` (not used for update/status)
+
+            ### 4. Click "Build" to Start Manual Deployment
+
+            ### 5. After Jenkins Deployment
+            - ✅ **If Jenkins succeeds:** Manually merge this PR
+            - ❌ **If Jenkins fails:** Check logs, fix issues, and re-run Jenkins
+
+            ## 📊 Deployment Details
+            - **Branch to Deploy:** \`${branchName}\`
+            - **Database Context:** \`${dbContext}\` (auto-detected from XML)
+            - **Changesets Ready:** ${processedFiles} file(s)
+
+            ## ⚠️ Important Notes
+            - **DO NOT MERGE** this PR until Jenkins deployment succeeds
+            - Test with \`status\` action first, then use \`update\` to apply changes
+            - If deployment fails, you can push more commits to fix issues
+
             ---
-            *🤖 Automated deployment via Jenkins*  
+            *🤖 Automated XML generation completed*  
             *⚡ [View Workflow Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})*
             `;
             
@@ -331,26 +221,20 @@ jobs:
               body: commentBody
             });
 
-      # Step 11: Summary
+      # Step 9: Summary
       - name: Workflow Summary
         if: always()
         run: |
-          echo "=== Deployment Workflow Summary ==="
+          echo "=== XML Generation Summary ==="
           echo "PR: ${{ github.event.pull_request.title }}"
           echo "Branch: ${{ github.event.pull_request.head.ref }}"
           echo "JS Files: ${{ env.has_js_files }}"
           echo "Processed: ${{ env.processed_files }}"
           echo "Successful: ${{ env.successful_files }}"
-          echo "Jenkins Triggered: ${{ env.jenkins_triggered }}"
-          echo "Jenkins Success: ${{ env.jenkins_success }}"
-          
-          if [ "${{ env.jenkins_success }}" = "true" ]; then
-            echo "🎉 Deployment successful - PR auto-merged"
-            exit 0
-          elif [ "${{ env.has_js_files }}" = "true" ]; then
-            echo "❌ Deployment failed - PR remains open"
-            exit 1
+          echo "Context: ${{ env.context }}"
+          echo ""
+          if [ "${{ env.has_js_files }}" = "true" ]; then
+            echo "✅ XML changesets generated - Ready for manual Jenkins deployment"
           else
             echo "ℹ️ No JS files to process"
-            exit 0
           fi
