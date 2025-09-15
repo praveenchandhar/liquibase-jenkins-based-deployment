@@ -14,8 +14,8 @@ pipeline {
         )
         choice(
             name: 'ROLLBACK_COUNT', 
-            choices: [], 
-            description: 'Number of changesets to rollback (populated dynamically)'
+            choices: ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10'], 
+            description: 'Number of changesets to rollback (only for rollback action)'
         )
     }
     
@@ -63,8 +63,8 @@ pipeline {
                     sh '''
                         echo "✅ Repository checked out successfully"
                         echo "📁 Current directory: $(pwd)"
-                        echo "🌿 Current branch/tag: $(git describe --always --tags)"
-                        echo "📊 Latest commit: $(git log -1 --oneline)"
+                        echo "🌿 Current branch/tag: $(git describe --always --tags 2>/dev/null || echo 'unknown')"
+                        echo "📊 Latest commit: $(git log -1 --oneline 2>/dev/null || echo 'unknown')"
                     '''
                 }
             }
@@ -80,15 +80,20 @@ pipeline {
                         
                         # Download Liquibase CLI if not exists
                         if [ ! -f "${WORKSPACE}/liquibase" ]; then
-                            echo "Liquibase installed at: ${WORKSPACE}/liquibase"
+                            echo "📥 Downloading Liquibase CLI ${LIQUIBASE_VERSION}..."
                             curl -L -o liquibase-${LIQUIBASE_VERSION}.zip https://github.com/liquibase/liquibase/releases/download/v${LIQUIBASE_VERSION}/liquibase-${LIQUIBASE_VERSION}.zip
                             unzip liquibase-${LIQUIBASE_VERSION}.zip
                             chmod +x liquibase
                             mv liquibase ${WORKSPACE}/liquibase
                             export PATH="${WORKSPACE}:$PATH"
+                            echo "Liquibase installed at: ${WORKSPACE}/liquibase"
+                        else
+                            echo "✅ Liquibase already installed"
                         fi
                         
-                        liquibase --version
+                        # Verify installation
+                        export PATH="${WORKSPACE}:$PATH"
+                        ${WORKSPACE}/liquibase --version
                     '''
                 }
             }
@@ -100,6 +105,7 @@ pipeline {
                     echo "📦 Downloading Liquibase dependencies..."
                     
                     sh '''
+                        # Check if dependencies already exist
                         if [ ! -f "${JARS_DIR}/liquibase-mongodb.jar" ]; then
                             echo "📥 Downloading dependencies..."
                             
@@ -130,6 +136,10 @@ pipeline {
                             # SLF4J
                             curl -L -o ${JARS_DIR}/slf4j-api.jar https://repo1.maven.org/maven2/org/slf4j/slf4j-api/1.7.36/slf4j-api-1.7.36.jar
                             curl -L -o ${JARS_DIR}/slf4j-simple.jar https://repo1.maven.org/maven2/org/slf4j/slf4j-simple/1.7.36/slf4j-simple-1.7.36.jar
+
+                            echo "✅ All dependencies downloaded"
+                        else
+                            echo "✅ Dependencies already exist"
                         fi
                         
                         echo "📋 Available JAR files:"
@@ -176,8 +186,11 @@ pipeline {
                         echo "📊 Total changesets in file: $CHANGESET_COUNT"
                         echo "$CHANGESET_COUNT" > changeset_count.txt
                         
-                        # Extract database context
-                        CONTEXT=$(grep -oP 'context="[^"]*"' "$LATEST_CHANGESET" | head -n 1 | sed 's/context="//; s/"//' || echo "liquibase_test")
+                        # Extract database context using sed (more compatible than grep -P)
+                        CONTEXT=$(sed -n 's/.*context="\\([^"]*\\)".*/\\1/p' "$LATEST_CHANGESET" | head -n 1)
+                        if [ -z "$CONTEXT" ]; then
+                            CONTEXT="liquibase_test"
+                        fi
                         echo "🎯 Database context: $CONTEXT"
                         echo "$CONTEXT" > database_context.txt
                         
@@ -210,10 +223,6 @@ pipeline {
                         echo "📊 Changeset count: $CHANGESET_COUNT"
                         echo "🎯 Database context: $DATABASE_CONTEXT"
                         echo "🚀 Action: ${LIQUIBASE_ACTION}"
-                        
-                        # Setup CLASSPATH
-                        CLASSPATH=$(find ${JARS_DIR} -name "*.jar" | tr '\\n' ':')
-                        export CLASSPATH
                         
                         # Execute using the shell script
                         chmod +x scripts/liquibase_runner.sh
