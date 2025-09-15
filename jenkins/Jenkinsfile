@@ -23,7 +23,7 @@ pipeline {
         MONGO_CONNECTION_BASE = "mongodb+srv://praveenchandharts:kixIUsDWGd3n6w5S@praveen-mongodb-github.lhhwdqa.mongodb.net"
         LIQUIBASE_VERSION = "4.31.1"
         JARS_DIR = "${WORKSPACE}/liquibase-jars"
-        REPO_URL = "https://github.com/your-org/liquibase-jenkins-based-deployment.git"
+        REPO_URL = "https://github.com/praveenchandhar/liquibase-jenkins-based-deployment.git"
     }
     
     stages {
