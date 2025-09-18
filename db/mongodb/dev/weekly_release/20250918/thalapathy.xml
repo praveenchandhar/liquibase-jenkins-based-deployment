@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:mongodb="http://www.liquibase.org/xml/ns/dbchangelog-ext"
+    xsi:schemaLocation="
+        http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.5.xsd
+        http://www.liquibase.org/xml/ns/dbchangelog-ext
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-ext.xsd">
+    <changeSet id="20250918_5" author="praveenchandhar" context="liquibase_test">
+        <mongodb:insertOne collectionName="orders">
+            <mongodb:document><![CDATA[
+            {
+    userId: "john@example.com",
+    items: ["laptop", "mouse"],
+    total: 1029.99,
+    status: "pending",
+    created: new Date()
+}
+            ]]></mongodb:document>
+        </mongodb:insertOne>
+    </changeSet>
+</databaseChangeLog>
