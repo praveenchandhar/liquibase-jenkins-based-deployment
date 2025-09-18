@@ -12,6 +12,11 @@ pipeline {
             choices: ['status', 'update', 'rollback'], 
             description: 'Liquibase action to perform'
         )
+        text(
+            name: 'SPECIFIC_FILES',
+            defaultValue: '',
+            description: 'Specific XML files to deploy (one per line, relative to repo root). Leave empty to deploy all XML files from the branch.\n\nExample:\ndb/mongodb/dev/weekly_release/20250918/first.xml\ndb/mongodb/dev/weekly_release/20250918/second.xml'
+        )
         choice(
             name: 'ROLLBACK_COUNT', 
             choices: ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10'], 
@@ -37,6 +42,11 @@ pipeline {
                     echo "🔍 Deployment Parameters:"
                     echo "   Branch/Tag: ${params.BRANCH_OR_TAG}"
                     echo "   Action: ${params.LIQUIBASE_ACTION}"
+                    if (params.SPECIFIC_FILES?.trim()) {
+                        echo "   Specific Files: ${params.SPECIFIC_FILES}"
+                    } else {
+                        echo "   Files: All XML files will be processed"
+                    }
                     if (params.LIQUIBASE_ACTION == 'rollback') {
                         echo "   Rollback Count: ${params.ROLLBACK_COUNT}"
                     }
@@ -149,10 +159,10 @@ pipeline {
             }
         }
         
-        stage('Discover Changesets and Count') {
+        stage('Discover and Validate Changesets') {
             steps {
                 script {
-                    echo "🔍 Discovering changesets..."
+                    echo "🔍 Discovering and validating changesets..."
                     
                     sh '''
                         CHANGESETS_DIR="db/mongodb/dev"
@@ -162,29 +172,55 @@ pipeline {
                             exit 1
                         fi
                         
-                        # Find all XML files
-                        XML_FILES=$(find $CHANGESETS_DIR -name "*.xml" -type f 2>/dev/null | sort)
-                        
-                        if [ -z "$XML_FILES" ]; then
-                            echo "❌ No XML changeset files found"
-                            exit 1
+                        # Determine which XML files to process
+                        if [ -n "${SPECIFIC_FILES}" ] && [ "${SPECIFIC_FILES}" != "" ]; then
+                            echo "🎯 Processing specific files provided by user:"
+                            echo "${SPECIFIC_FILES}" > files_to_process.txt
+                            
+                            # Validate each specified file exists
+                            while IFS= read -r file_path; do
+                                if [ -n "$file_path" ]; then
+                                    if [ -f "$file_path" ]; then
+                                        echo "   ✅ $file_path"
+                                    else
+                                        echo "   ❌ File not found: $file_path"
+                                        exit 1
+                                    fi
+                                fi
+                            done < files_to_process.txt
+                        else
+                            echo "🔍 Auto-discovering all XML files in repository:"
+                            find $CHANGESETS_DIR -name "*.xml" -type f 2>/dev/null | sort > files_to_process.txt
+                            
+                            if [ ! -s files_to_process.txt ]; then
+                                echo "❌ No XML changeset files found"
+                                exit 1
+                            fi
+                            
+                            echo "   Found XML files:"
+                            while IFS= read -r file_path; do
+                                echo "   📄 $file_path"
+                            done < files_to_process.txt
                         fi
                         
-                        echo "✅ Found XML changeset files:"
-                        echo "$XML_FILES" | while read -r file; do
-                            echo "   📄 $file"
-                        done
-                        
-                        # Get the latest changeset file
-                        LATEST_CHANGESET=$(echo "$XML_FILES" | tail -1)
+                        # Get the latest/primary changeset file for context extraction
+                        LATEST_CHANGESET=$(tail -1 files_to_process.txt)
                         echo ""
-                        echo "🎯 Using latest changeset: $LATEST_CHANGESET"
+                        echo "🎯 Primary changeset for context: $LATEST_CHANGESET"
                         echo "$LATEST_CHANGESET" > latest_changeset.txt
                         
-                        # Count changesets in the file
-                        CHANGESET_COUNT=$(grep -c "<changeSet" "$LATEST_CHANGESET" || echo "0")
-                        echo "📊 Total changesets in file: $CHANGESET_COUNT"
-                        echo "$CHANGESET_COUNT" > changeset_count.txt
+                        # Count total changesets across all files
+                        TOTAL_CHANGESET_COUNT=0
+                        while IFS= read -r file_path; do
+                            if [ -n "$file_path" ] && [ -f "$file_path" ]; then
+                                FILE_COUNT=$(grep -c "<changeSet" "$file_path" || echo "0")
+                                echo "📊 $file_path: $FILE_COUNT changeset(s)"
+                                TOTAL_CHANGESET_COUNT=$((TOTAL_CHANGESET_COUNT + FILE_COUNT))
+                            fi
+                        done < files_to_process.txt
+                        
+                        echo "📊 Total changesets across all files: $TOTAL_CHANGESET_COUNT"
+                        echo "$TOTAL_CHANGESET_COUNT" > changeset_count.txt
                         
                         # Extract database context using sed (more compatible than grep -P)
                         CONTEXT=$(sed -n 's/.*context="\\([^"]*\\)".*/\\1/p' "$LATEST_CHANGESET" | head -n 1)
@@ -197,11 +233,11 @@ pipeline {
                         # Validate rollback count if rollback action
                         if [ "${LIQUIBASE_ACTION}" = "rollback" ]; then
                             ROLLBACK_COUNT="${ROLLBACK_COUNT}"
-                            if [ -z "$ROLLBACK_COUNT" ] || [ "$ROLLBACK_COUNT" -gt "$CHANGESET_COUNT" ]; then
-                                echo "❌ Invalid rollback count. Available changesets: $CHANGESET_COUNT"
+                            if [ -z "$ROLLBACK_COUNT" ] || [ "$ROLLBACK_COUNT" -gt "$TOTAL_CHANGESET_COUNT" ]; then
+                                echo "❌ Invalid rollback count. Available changesets: $TOTAL_CHANGESET_COUNT"
                                 exit 1
                             fi
-                            echo "✅ Rollback count $ROLLBACK_COUNT is valid (max: $CHANGESET_COUNT)"
+                            echo "✅ Rollback count $ROLLBACK_COUNT is valid (max: $TOTAL_CHANGESET_COUNT)"
                         fi
                     '''
                 }
@@ -215,27 +251,36 @@ pipeline {
                     
                     sh '''
                         # Read configuration files
-                        CHANGESET_FILE=$(cat latest_changeset.txt)
-                        CHANGESET_COUNT=$(cat changeset_count.txt)
                         DATABASE_CONTEXT=$(cat database_context.txt)
+                        CHANGESET_COUNT=$(cat changeset_count.txt)
                         
-                        echo "📄 Using changeset: $CHANGESET_FILE"
-                        echo "📊 Changeset count: $CHANGESET_COUNT"
+                        echo "📊 Total changeset count: $CHANGESET_COUNT"
                         echo "🎯 Database context: $DATABASE_CONTEXT"
                         echo "🚀 Action: ${LIQUIBASE_ACTION}"
                         
-                        # Execute using the shell script
-                        chmod +x scripts/liquibase_runner.sh
+                        # Process each file
+                        while IFS= read -r changeset_file; do
+                            if [ -n "$changeset_file" ] && [ -f "$changeset_file" ]; then
+                                echo ""
+                                echo "🔄 Processing file: $changeset_file"
+                                
+                                # Execute using the shell script
+                                chmod +x scripts/liquibase_runner.sh
+                                
+                                if [ "${LIQUIBASE_ACTION}" = "rollback" ]; then
+                                    echo "🔄 Executing rollback with count: ${ROLLBACK_COUNT}"
+                                    ./scripts/liquibase_runner.sh rollback "$DATABASE_CONTEXT" "$changeset_file" "${ROLLBACK_COUNT}"
+                                else
+                                    echo "🔄 Executing: ${LIQUIBASE_ACTION}"
+                                    ./scripts/liquibase_runner.sh "${LIQUIBASE_ACTION}" "$DATABASE_CONTEXT" "$changeset_file"
+                                fi
+                                
+                                echo "✅ File processed: $changeset_file"
+                            fi
+                        done < files_to_process.txt
                         
-                        if [ "${LIQUIBASE_ACTION}" = "rollback" ]; then
-                            echo "🔄 Executing rollback with count: ${ROLLBACK_COUNT}"
-                            ./scripts/liquibase_runner.sh rollback "$DATABASE_CONTEXT" "$CHANGESET_FILE" "${ROLLBACK_COUNT}"
-                        else
-                            echo "🔄 Executing: ${LIQUIBASE_ACTION}"
-                            ./scripts/liquibase_runner.sh "${LIQUIBASE_ACTION}" "$DATABASE_CONTEXT" "$CHANGESET_FILE"
-                        fi
-                        
-                        echo "✅ Liquibase ${LIQUIBASE_ACTION} completed successfully"
+                        echo ""
+                        echo "✅ All Liquibase operations completed successfully"
                     '''
                 }
             }
@@ -244,7 +289,21 @@ pipeline {
     
     post {
         success {
-            echo "🎉 Deployment completed successfully!"
+            script {
+                sh '''
+                    echo "🎉 Deployment completed successfully!"
+                    echo ""
+                    echo "📋 Deployment Summary:"
+                    echo "   Branch/Tag: ${BRANCH_OR_TAG}"
+                    echo "   Action: ${LIQUIBASE_ACTION}"
+                    echo "   Files processed:"
+                    while IFS= read -r file_path; do
+                        if [ -n "$file_path" ]; then
+                            echo "     ✅ $file_path"
+                        fi
+                    done < files_to_process.txt
+                '''
+            }
         }
         
         failure {
@@ -253,7 +312,7 @@ pipeline {
         
         always {
             echo "🧹 Cleaning up..."
-            archiveArtifacts artifacts: 'latest_changeset.txt,changeset_count.txt,database_context.txt', allowEmptyArchive: true
+            archiveArtifacts artifacts: 'files_to_process.txt,latest_changeset.txt,changeset_count.txt,database_context.txt', allowEmptyArchive: true
         }
     }
 }
