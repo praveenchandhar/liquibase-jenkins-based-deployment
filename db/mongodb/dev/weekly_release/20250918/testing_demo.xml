@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:mongodb="http://www.liquibase.org/xml/ns/dbchangelog-ext"
+    xsi:schemaLocation="
+        http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.5.xsd
+        http://www.liquibase.org/xml/ns/dbchangelog-ext
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-ext.xsd">
+    <changeSet id="20250918_4.1" author="praveenchandhar" context="liquibase_test">
+        <mongodb:insertMany collectionName="users">
+            <mongodb:documents><![CDATA[
+            [
+    {
+        name: "John Doe",
+        email: "john@example.com",
+        role: "admin",
+        created: new Date(),
+        status: "active"
+    },
+    {
+        name: "Jane Smith",
+        email: "jane@example.com", 
+        role: "user",
+        created: new Date(),
+        status: "active"
+    }
+]
+            ]]></mongodb:documents>
+        </mongodb:insertMany>
+    </changeSet>
+    <changeSet id="20250918_4.2" author="praveenchandhar" context="liquibase_test">
+        <mongodb:insertOne collectionName="orders">
+            <mongodb:document><![CDATA[
+            {
+    userId: "john@example.com",
+    items: ["laptop", "mouse"],
+    total: 1029.99,
+    status: "pending",
+    created: new Date()
+}
+            ]]></mongodb:document>
+        </mongodb:insertOne>
+    </changeSet>
+    <changeSet id="20250918_4.3" author="praveenchandhar" context="liquibase_test">
+        <mongodb:runCommand>
+            <mongodb:command><![CDATA[
+            {
+                "createIndexes": "users",
+                "indexes": [
+                    {
+                        "key": { email: 1 },
+                        "name": "users_index_3"
+                    }
+                ]
+            }
+            ]]></mongodb:command>
+        </mongodb:runCommand>
+    </changeSet>
+</databaseChangeLog>
