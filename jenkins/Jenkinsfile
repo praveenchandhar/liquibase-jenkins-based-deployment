@@ -3,316 +3,196 @@ pipeline {
     
     parameters {
         string(
-            name: 'BRANCH_OR_TAG', 
-            defaultValue: '', 
-            description: 'Branch or tag name containing the changesets to deploy'
+            name: 'BRANCH',
+            defaultValue: 'main',
+            description: 'Git branch to deploy from'
         )
         choice(
-            name: 'LIQUIBASE_ACTION', 
-            choices: ['status', 'update', 'rollback'], 
-            description: 'Liquibase action to perform'
-        )
-        text(
-            name: 'SPECIFIC_FILES',
-            defaultValue: '',
-            description: 'Specific XML files to deploy (one per line, relative to repo root). Leave empty to deploy all XML files from the branch.\n\nExample:\ndb/mongodb/dev/weekly_release/20250918/first.xml\ndb/mongodb/dev/weekly_release/20250918/second.xml'
+            name: 'COMMAND',
+            choices: ['status', 'update'],
+            description: 'Liquibase command to execute'
         )
         choice(
-            name: 'ROLLBACK_COUNT', 
-            choices: ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10'], 
-            description: 'Number of changesets to rollback (only for rollback action)'
+            name: 'DATABASE',
+            choices: ['sample_mflix', 'liquibase_test', 'liquibase_test_new'],
+            description: 'Target database'
+        )
+        string(
+            name: 'VERSION_OR_FILE',
+            defaultValue: 'latest',
+            description: 'Version (e.g., 24092025) or specific file path (e.g., db/mongodb/weekly_release/24092025/testing.yaml)'
+        )
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['weekly_release', 'monthly_release'],
+            description: 'Environment directory'
         )
     }
     
     environment {
-        MONGO_CONNECTION_BASE = "mongodb+srv://praveenchandharts:kixIUsDWGd3n6w5S@praveen-mongodb-github.lhhwdqa.mongodb.net"
-        LIQUIBASE_VERSION = "4.31.1"
-        JARS_DIR = "${WORKSPACE}/liquibase-jars"
-        REPO_URL = "https://github.com/praveenchandhar/liquibase-jenkins-based-deployment.git"
+        MONGO_CONNECTION_BASE = credentials('mongo-connection-string')
+        BUILD_TIMESTAMP = sh(script: 'date +%Y-%m-%d_%H-%M-%S', returnStdout: true).trim()
     }
     
     stages {
-        stage('Validate Parameters') {
+        stage('Checkout') {
             steps {
+                echo "🔄 Checking out branch: ${params.BRANCH}"
+                checkout([
+                    $class: 'GitSCM',
+                    branches: [[name: "origin/${params.BRANCH}"]],
+                    userRemoteConfigs: [[
+                        url: 'https://github.com/praveenchandhar/liquibase-dbac.git',
+                        credentialsId: 'github-token'
+                    ]]
+                ])
+                echo "✅ Repository checked out successfully"
+                echo "📋 Current branch: ${params.BRANCH}"
                 script {
-                    if (!params.BRANCH_OR_TAG) {
-                        error("BRANCH_OR_TAG parameter is required")
-                    }
-                    
-                    echo "🔍 Deployment Parameters:"
-                    echo "   Branch/Tag: ${params.BRANCH_OR_TAG}"
-                    echo "   Action: ${params.LIQUIBASE_ACTION}"
-                    if (params.SPECIFIC_FILES?.trim()) {
-                        echo "   Specific Files: ${params.SPECIFIC_FILES}"
+                    env.CURRENT_COMMIT = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
+                    env.SHORT_COMMIT = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+                }
+                echo "📝 Current commit: ${env.SHORT_COMMIT}"
+                sh "git log --oneline -3"
+            }
+        }
+        
+        stage('Setup Dependencies') {
+            steps {
+                echo "🔧 Setting up Liquibase dependencies..."
+                script {
+                    if (fileExists('scripts/setup-dependencies.sh')) {
+                        sh "chmod +x scripts/setup-dependencies.sh"
+                        sh "./scripts/setup-dependencies.sh"
                     } else {
-                        echo "   Files: All XML files will be processed"
-                    }
-                    if (params.LIQUIBASE_ACTION == 'rollback') {
-                        echo "   Rollback Count: ${params.ROLLBACK_COUNT}"
+                        error "setup-dependencies.sh script not found!"
                     }
                 }
+                echo "✅ Dependencies setup completed"
             }
         }
         
-        stage('Checkout Repository') {
+        stage('Pre-Deployment Status') {
             steps {
+                echo "🔍 Checking current deployment status..."
                 script {
-                    echo "📥 Checking out: ${params.BRANCH_OR_TAG}"
-                    
-                    deleteDir()
-                    
-                    checkout([
-                        $class: 'GitSCM',
-                        branches: [[name: "${params.BRANCH_OR_TAG}"]],
-                        userRemoteConfigs: [[
-                            url: "${env.REPO_URL}",
-                            credentialsId: 'github-credentials'
-                        ]]
-                    ])
-                    
-                    sh '''
-                        echo "✅ Repository checked out successfully"
-                        echo "📁 Current directory: $(pwd)"
-                        echo "🌿 Current branch/tag: $(git describe --always --tags 2>/dev/null || echo 'unknown')"
-                        echo "📊 Latest commit: $(git log -1 --oneline 2>/dev/null || echo 'unknown')"
-                    '''
+                    if (fileExists('scripts/run-liquibase.sh')) {
+                        sh "chmod +x scripts/run-liquibase.sh"
+                        sh "./scripts/run-liquibase.sh status ${params.DATABASE} ${params.VERSION_OR_FILE} ${params.ENVIRONMENT}"
+                    } else {
+                        error "run-liquibase.sh script not found!"
+                    }
                 }
             }
         }
         
-        stage('Setup Liquibase Environment') {
+        stage('Execute Liquibase') {
+            when {
+                expression { params.COMMAND == 'update' }
+            }
             steps {
+                echo "🚀 Executing Liquibase deployment..."
                 script {
-                    echo "🔧 Setting up Liquibase environment..."
-                    
-                    sh '''
-                        mkdir -p ${JARS_DIR}
-                        
-                        # Download Liquibase CLI if not exists
-                        if [ ! -f "${WORKSPACE}/liquibase" ]; then
-                            echo "📥 Downloading Liquibase CLI ${LIQUIBASE_VERSION}..."
-                            curl -L -o liquibase-${LIQUIBASE_VERSION}.zip https://github.com/liquibase/liquibase/releases/download/v${LIQUIBASE_VERSION}/liquibase-${LIQUIBASE_VERSION}.zip
-                            unzip liquibase-${LIQUIBASE_VERSION}.zip
-                            chmod +x liquibase
-                            mv liquibase ${WORKSPACE}/liquibase
-                            export PATH="${WORKSPACE}:$PATH"
-                            echo "Liquibase installed at: ${WORKSPACE}/liquibase"
-                        else
-                            echo "✅ Liquibase already installed"
-                        fi
-                        
-                        # Verify installation
-                        export PATH="${WORKSPACE}:$PATH"
-                        ${WORKSPACE}/liquibase --version
-                    '''
+                    sh "./scripts/run-liquibase.sh update ${params.DATABASE} ${params.VERSION_OR_FILE} ${params.ENVIRONMENT}"
+                }
+                echo "✅ Liquibase deployment completed"
+            }
+        }
+        
+        stage('Create Deployment Record') {
+            when {
+                expression { params.COMMAND == 'update' }
+            }
+            steps {
+                echo "📝 Creating deployment record..."
+                script {
+                    def deploymentRecord = """
+# Deployment Record
+- **Date**: ${env.BUILD_TIMESTAMP}
+- **Branch**: ${params.BRANCH}
+- **Commit**: ${env.SHORT_COMMIT}
+- **Command**: ${params.COMMAND}
+- **Database**: ${params.DATABASE}
+- **Version/File**: ${params.VERSION_OR_FILE}
+- **Environment**: ${params.ENVIRONMENT}
+- **Status**: SUCCESS
+"""
+                    writeFile file: "deployment-${env.BUILD_TIMESTAMP}.md", text: deploymentRecord
+                    echo "📄 Deployment record created: deployment-${env.BUILD_TIMESTAMP}.md"
                 }
             }
         }
         
-        stage('Download Dependencies') {
+        stage('Commit Results to Same Branch') {
+            when {
+                expression { params.COMMAND == 'update' }
+            }
             steps {
+                echo "📤 Committing deployment results back to branch: ${params.BRANCH}"
                 script {
-                    echo "📦 Downloading Liquibase dependencies..."
-                    
-                    sh '''
-                        # Check if dependencies already exist
-                        if [ ! -f "${JARS_DIR}/liquibase-mongodb.jar" ]; then
-                            echo "📥 Downloading dependencies..."
+                    try {
+                        sh """
+                            git config --global user.email "jenkins@praveenchandhar.com"
+                            git config --global user.name "Jenkins CI"
+                            git add deployment-${env.BUILD_TIMESTAMP}.md
+                            git commit -m "📈 Deployment completed: ${params.DATABASE} - ${env.BUILD_TIMESTAMP}
                             
-                            # MongoDB JARs
-                            curl -L -o ${JARS_DIR}/mongodb-driver-core.jar https://repo1.maven.org/maven2/org/mongodb/mongodb-driver-core/5.5.0/mongodb-driver-core-5.5.0.jar
-                            curl -L -o ${JARS_DIR}/mongodb-driver-sync.jar https://repo1.maven.org/maven2/org/mongodb/mongodb-driver-sync/5.5.0/mongodb-driver-sync-5.5.0.jar
-                            curl -L -o ${JARS_DIR}/bson.jar https://repo1.maven.org/maven2/org/mongodb/bson/5.5.0/bson-5.5.0.jar
-
-                            # Liquibase Core
-                            curl -L -o ${JARS_DIR}/liquibase-core.jar https://repo1.maven.org/maven2/org/liquibase/liquibase-core/${LIQUIBASE_VERSION}/liquibase-core-${LIQUIBASE_VERSION}.jar
-
-                            # Liquibase MongoDB Extension
-                            curl -L -o ${JARS_DIR}/liquibase-mongodb.jar https://repo1.maven.org/maven2/org/liquibase/ext/liquibase-mongodb/${LIQUIBASE_VERSION}/liquibase-mongodb-${LIQUIBASE_VERSION}.jar
-
-                            # Additional Dependencies
-                            curl -L -o ${JARS_DIR}/commons-io.jar https://repo1.maven.org/maven2/commons-io/commons-io/2.13.0/commons-io-2.13.0.jar
-                            curl -L -o ${JARS_DIR}/commons-lang3.jar https://repo1.maven.org/maven2/org/apache/commons/commons-lang3/3.13.0/commons-lang3-3.13.0.jar
-                            curl -L -o ${JARS_DIR}/snakeyaml.jar https://repo1.maven.org/maven2/org/yaml/snakeyaml/1.33/snakeyaml-1.33.jar
-
-                            # Jackson Dependencies
-                            curl -L -o ${JARS_DIR}/jackson-annotations.jar https://repo1.maven.org/maven2/com/fasterxml/jackson/core/jackson-annotations/2.14.2/jackson-annotations-2.14.2.jar
-                            curl -L -o ${JARS_DIR}/jackson-core.jar https://repo1.maven.org/maven2/com/fasterxml/jackson/core/jackson-core/2.14.2/jackson-core-2.14.2.jar
-                            curl -L -o ${JARS_DIR}/jackson-databind.jar https://repo1.maven.org/maven2/com/fasterxml/jackson/core/jackson-databind/2.14.2/jackson-databind-2.14.2.jar
-
-                            # OpenCSV
-                            curl -L -o ${JARS_DIR}/opencsv.jar https://repo1.maven.org/maven2/com/opencsv/opencsv/5.7.1/opencsv-5.7.1.jar
-
-                            # SLF4J
-                            curl -L -o ${JARS_DIR}/slf4j-api.jar https://repo1.maven.org/maven2/org/slf4j/slf4j-api/1.7.36/slf4j-api-1.7.36.jar
-                            curl -L -o ${JARS_DIR}/slf4j-simple.jar https://repo1.maven.org/maven2/org/slf4j/slf4j-simple/1.7.36/slf4j-simple-1.7.36.jar
-
-                            echo "✅ All dependencies downloaded"
-                        else
-                            echo "✅ Dependencies already exist"
-                        fi
-                        
-                        echo "📋 Available JAR files:"
-                        ls -la ${JARS_DIR}/
-                    '''
+                            - Command: ${params.COMMAND}
+                            - Database: ${params.DATABASE}
+                            - Version/File: ${params.VERSION_OR_FILE}
+                            - Environment: ${params.ENVIRONMENT}
+                            - Commit: ${env.SHORT_COMMIT}"
+                            
+                            git push origin HEAD:${params.BRANCH}
+                        """
+                        echo "✅ Deployment results committed to branch: ${params.BRANCH}"
+                    } catch (Exception e) {
+                        echo "⚠️ Could not commit deployment results: ${e.getMessage()}"
+                        echo "This is not critical, deployment was successful"
+                    }
                 }
             }
         }
         
-        stage('Discover and Validate Changesets') {
+        stage('Post-Deployment Status') {
+            when {
+                expression { params.COMMAND == 'update' }
+            }
             steps {
+                echo "📊 Checking post-deployment status..."
                 script {
-                    echo "🔍 Discovering and validating changesets..."
-                    
-                    sh '''
-                        CHANGESETS_DIR="db/mongodb/dev"
-                        
-                        if [ ! -d "$CHANGESETS_DIR" ]; then
-                            echo "❌ Changesets directory not found: $CHANGESETS_DIR"
-                            exit 1
-                        fi
-                        
-                        # Determine which XML files to process
-                        if [ -n "${SPECIFIC_FILES}" ] && [ "${SPECIFIC_FILES}" != "" ]; then
-                            echo "🎯 Processing specific files provided by user:"
-                            echo "${SPECIFIC_FILES}" > files_to_process.txt
-                            
-                            # Validate each specified file exists
-                            while IFS= read -r file_path; do
-                                if [ -n "$file_path" ]; then
-                                    if [ -f "$file_path" ]; then
-                                        echo "   ✅ $file_path"
-                                    else
-                                        echo "   ❌ File not found: $file_path"
-                                        exit 1
-                                    fi
-                                fi
-                            done < files_to_process.txt
-                        else
-                            echo "🔍 Auto-discovering all XML files in repository:"
-                            find $CHANGESETS_DIR -name "*.xml" -type f 2>/dev/null | sort > files_to_process.txt
-                            
-                            if [ ! -s files_to_process.txt ]; then
-                                echo "❌ No XML changeset files found"
-                                exit 1
-                            fi
-                            
-                            echo "   Found XML files:"
-                            while IFS= read -r file_path; do
-                                echo "   📄 $file_path"
-                            done < files_to_process.txt
-                        fi
-                        
-                        # Get the latest/primary changeset file for context extraction
-                        LATEST_CHANGESET=$(tail -1 files_to_process.txt)
-                        echo ""
-                        echo "🎯 Primary changeset for context: $LATEST_CHANGESET"
-                        echo "$LATEST_CHANGESET" > latest_changeset.txt
-                        
-                        # Count total changesets across all files
-                        TOTAL_CHANGESET_COUNT=0
-                        while IFS= read -r file_path; do
-                            if [ -n "$file_path" ] && [ -f "$file_path" ]; then
-                                FILE_COUNT=$(grep -c "<changeSet" "$file_path" || echo "0")
-                                echo "📊 $file_path: $FILE_COUNT changeset(s)"
-                                TOTAL_CHANGESET_COUNT=$((TOTAL_CHANGESET_COUNT + FILE_COUNT))
-                            fi
-                        done < files_to_process.txt
-                        
-                        echo "📊 Total changesets across all files: $TOTAL_CHANGESET_COUNT"
-                        echo "$TOTAL_CHANGESET_COUNT" > changeset_count.txt
-                        
-                        # Extract database context using sed (more compatible than grep -P)
-                        CONTEXT=$(sed -n 's/.*context="\\([^"]*\\)".*/\\1/p' "$LATEST_CHANGESET" | head -n 1)
-                        if [ -z "$CONTEXT" ]; then
-                            CONTEXT="liquibase_test"
-                        fi
-                        echo "🎯 Database context: $CONTEXT"
-                        echo "$CONTEXT" > database_context.txt
-                        
-                        # Validate rollback count if rollback action
-                        if [ "${LIQUIBASE_ACTION}" = "rollback" ]; then
-                            ROLLBACK_COUNT="${ROLLBACK_COUNT}"
-                            if [ -z "$ROLLBACK_COUNT" ] || [ "$ROLLBACK_COUNT" -gt "$TOTAL_CHANGESET_COUNT" ]; then
-                                echo "❌ Invalid rollback count. Available changesets: $TOTAL_CHANGESET_COUNT"
-                                exit 1
-                            fi
-                            echo "✅ Rollback count $ROLLBACK_COUNT is valid (max: $TOTAL_CHANGESET_COUNT)"
-                        fi
-                    '''
+                    sh "./scripts/run-liquibase.sh status ${params.DATABASE} ${params.VERSION_OR_FILE} ${params.ENVIRONMENT}"
                 }
             }
         }
         
-        stage('Execute Liquibase Deployment') {
+        stage('Summary') {
             steps {
-                script {
-                    echo "🚀 Executing Liquibase deployment..."
-                    
-                    sh '''
-                        # Read configuration files
-                        DATABASE_CONTEXT=$(cat database_context.txt)
-                        CHANGESET_COUNT=$(cat changeset_count.txt)
-                        
-                        echo "📊 Total changeset count: $CHANGESET_COUNT"
-                        echo "🎯 Database context: $DATABASE_CONTEXT"
-                        echo "🚀 Action: ${LIQUIBASE_ACTION}"
-                        
-                        # Process each file
-                        while IFS= read -r changeset_file; do
-                            if [ -n "$changeset_file" ] && [ -f "$changeset_file" ]; then
-                                echo ""
-                                echo "🔄 Processing file: $changeset_file"
-                                
-                                # Execute using the shell script
-                                chmod +x scripts/liquibase_runner.sh
-                                
-                                if [ "${LIQUIBASE_ACTION}" = "rollback" ]; then
-                                    echo "🔄 Executing rollback with count: ${ROLLBACK_COUNT}"
-                                    ./scripts/liquibase_runner.sh rollback "$DATABASE_CONTEXT" "$changeset_file" "${ROLLBACK_COUNT}"
-                                else
-                                    echo "🔄 Executing: ${LIQUIBASE_ACTION}"
-                                    ./scripts/liquibase_runner.sh "${LIQUIBASE_ACTION}" "$DATABASE_CONTEXT" "$changeset_file"
-                                fi
-                                
-                                echo "✅ File processed: $changeset_file"
-                            fi
-                        done < files_to_process.txt
-                        
-                        echo ""
-                        echo "✅ All Liquibase operations completed successfully"
-                    '''
-                }
+                echo "📋 Deployment Summary:"
+                echo "   • Command: ${params.COMMAND}"
+                echo "   • Database: ${params.DATABASE}"
+                echo "   • Version/File: ${params.VERSION_OR_FILE}"
+                echo "   • Environment: ${params.ENVIRONMENT}"
+                echo "   • Branch: ${params.BRANCH}"
+                echo "   • Commit: ${env.SHORT_COMMIT}"
+                echo "   • Status: ✅ SUCCESS"
             }
         }
     }
     
     post {
-        success {
-            script {
-                sh '''
-                    echo "🎉 Deployment completed successfully!"
-                    echo ""
-                    echo "📋 Deployment Summary:"
-                    echo "   Branch/Tag: ${BRANCH_OR_TAG}"
-                    echo "   Action: ${LIQUIBASE_ACTION}"
-                    echo "   Files processed:"
-                    while IFS= read -r file_path; do
-                        if [ -n "$file_path" ]; then
-                            echo "     ✅ $file_path"
-                        fi
-                    done < files_to_process.txt
-                '''
-            }
+        always {
+            echo "🏁 Pipeline execution completed"
         }
         
         failure {
-            echo "❌ Deployment failed!"
+            echo "❌ Pipeline failed!"
+            echo "🔍 Check the logs for details"
         }
         
-        always {
-            echo "🧹 Cleaning up..."
-            archiveArtifacts artifacts: 'files_to_process.txt,latest_changeset.txt,changeset_count.txt,database_context.txt', allowEmptyArchive: true
+        success {
+            echo "✅ Pipeline completed successfully!"
+            echo "🎉 Liquibase ${params.COMMAND} executed for ${params.DATABASE}"
         }
     }
 }
